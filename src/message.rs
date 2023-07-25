@@ -604,6 +604,9 @@ impl Message {
     }
 
     /// Returns the full path to the file associated with a message.
+    ///
+    /// The filename is mangled -- a random suffix is added before the extension. This suffix is
+    /// preserved across calls.
     pub fn get_file(&self, context: &Context) -> Option<PathBuf> {
         self.param.get_path(Param::File, context).unwrap_or(None)
     }
