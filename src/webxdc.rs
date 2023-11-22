@@ -20,6 +20,8 @@ use std::path::Path;
 use anyhow::{anyhow, bail, ensure, format_err, Context as _, Result};
 
 use deltachat_derive::FromSql;
+use iroh_gossip::net::Gossip;
+use iroh_gossip::proto::TopicId;
 use lettre_email::mime;
 use lettre_email::PartBuilder;
 use serde::{Deserialize, Serialize};
@@ -478,13 +480,22 @@ impl Context {
             .await?;
 
         if send_now {
-            self.sql.insert(
+            info!(context, "Sending iroh message to peers");
+            let gossip_group = self
+                .msg_id_to_gossip_group
+                .get(&instance_msg_id)
+                .context("can't get gossip group")?;
+            let topic = TopicId::from(instance.rfc724_mid);
+            gossip_group.group.broadcast(topic, status_update).await?;
+
+            /* self.sql.insert(
                 "INSERT INTO smtp_status_updates (msg_id, first_serial, last_serial, descr) VALUES(?, ?, ?, ?)
                  ON CONFLICT(msg_id)
                  DO UPDATE SET last_serial=excluded.last_serial, descr=excluded.descr",
                 (instance.id, status_update_serial, status_update_serial, descr),
             ).await?;
             self.scheduler.interrupt_smtp().await;
+            */
         }
         Ok(())
     }

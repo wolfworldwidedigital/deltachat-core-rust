@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{bail, ensure, Context as _, Result};
 use async_channel::{self as channel, Receiver, Sender};
+use iroh_net::MagicEndpoint;
 use ratelimit::Ratelimit;
 use tokio::sync::{Mutex, Notify, RwLock};
 
@@ -244,6 +245,13 @@ pub struct InnerContext {
     /// Standard RwLock instead of [`tokio::sync::RwLock`] is used
     /// because the lock is used from synchronous [`Context::emit_event`].
     pub(crate) debug_logging: std::sync::RwLock<Option<DebugLogging>>,
+
+    pub(crate) msg_id_to_gossip_group: Mutex<HashMap<MsgId, GossipGroup>>,
+    pub(crate) endpoint: MagicEndpoint,
+}
+
+pub(crate) struct GossipGroup {
+    pub(crate) group: Gossip,
 }
 
 /// The state of ongoing process.
@@ -367,6 +375,51 @@ impl Context {
         // without starting I/O.
         new_msgs_notify.notify_one();
 
+        // parse or generate our secret key
+        let secret_key = match args.secret_key {
+            None => SecretKey::generate(),
+            Some(key) => parse_secret_key(&key)?,
+        };
+        println!("> our secret key: {}", base32::fmt(secret_key.to_bytes()));
+
+        // configure our derp map
+        let derp_mode = match (args.no_derp, args.derp) {
+            (false, None) => DerpMode::Default,
+            (false, Some(url)) => DerpMode::Custom(DerpMap::from_url(url, 0)),
+            (true, None) => DerpMode::Disabled,
+            (true, Some(_)) => bail!("You cannot set --no-derp and --derp at the same time"),
+        };
+        println!("> using DERP servers: {}", fmt_derp_mode(&derp_mode));
+
+        // init a cell that will hold our gossip handle to be used in endpoint callbacks
+        let gossip_cell: OnceCell<Gossip> = OnceCell::new();
+
+        // setup a notification to emit once the initial endpoints of our local node are discovered
+        let notify = Arc::new(Notify::new());
+
+        // build our magic endpoint
+        let endpoint = MagicEndpoint::builder()
+            .secret_key(secret_key)
+            .alpns(vec![GOSSIP_ALPN.to_vec()])
+            .derp_mode(derp_mode)
+            .on_endpoints({
+                let gossip_cell = gossip_cell.clone();
+                let notify = notify.clone();
+                Box::new(move |endpoints| {
+                    if endpoints.is_empty() {
+                        return;
+                    }
+                    // send our updated endpoints to the gossip protocol to be sent as NodeAddr to peers
+                    if let Some(gossip) = gossip_cell.get() {
+                        gossip.update_endpoints(endpoints).ok();
+                    }
+                    // notify the outer task of the initial endpoint update (later updates are not interesting)
+                    notify.notify_one();
+                })
+            })
+            .bind(args.bind_port)
+            .await?;
+
         let inner = InnerContext {
             id,
             blobdir,
@@ -388,6 +441,8 @@ impl Context {
             last_full_folder_scan: Mutex::new(None),
             last_error: std::sync::RwLock::new("".to_string()),
             debug_logging: std::sync::RwLock::new(None),
+            msg_id_to_gossip_group: todo!(),
+            endpoint: todo!(),
         };
 
         let ctx = Context {
