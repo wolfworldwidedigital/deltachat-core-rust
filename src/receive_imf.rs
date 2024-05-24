@@ -1819,7 +1819,7 @@ async fn lookup_chat_or_create_adhoc_group(
         Ok(Some((new_chat_id, new_chat_id_blocked)))
     } else if allow_creation {
         // Try to create an ad hoc group.
-        if let Some(new_chat_id) = create_adhoc_group(
+        create_adhoc_group(
             context,
             mime_parser,
             create_blocked,
@@ -1828,12 +1828,7 @@ async fn lookup_chat_or_create_adhoc_group(
             is_partial_download,
         )
         .await
-        .context("Could not create ad hoc group")?
-        {
-            Ok(Some((new_chat_id, create_blocked)))
-        } else {
-            Ok(None)
-        }
+        .context("Could not create ad hoc group")
     } else {
         Ok(None)
     }
@@ -2508,7 +2503,7 @@ async fn create_adhoc_group(
     from_id: ContactId,
     to_ids: &[ContactId],
     is_partial_download: bool,
-) -> Result<Option<ChatId>> {
+) -> Result<Option<(ChatId, Blocked)>> {
     if is_partial_download {
         // Partial download may be an encrypted message with protected Subject header.
         //
@@ -2547,7 +2542,16 @@ async fn create_adhoc_group(
         );
         return Ok(None);
     }
-
+    if mime_parser
+        .get_header(HeaderDef::ChatGroupMemberRemoved)
+        .is_some()
+    {
+        info!(
+            context,
+            "Message removes member from unknown ad-hoc group (TRASH)."
+        );
+        return Ok(Some((DC_CHAT_ID_TRASH, Blocked::Not)));
+    }
     if member_ids.len() < 3 {
         return Ok(None);
     }
@@ -2579,7 +2583,7 @@ async fn create_adhoc_group(
     chatlist_events::emit_chatlist_changed(context);
     chatlist_events::emit_chatlist_item_changed(context, new_chat_id);
 
-    Ok(Some(new_chat_id))
+    Ok(Some((new_chat_id, create_blocked)))
 }
 
 #[derive(Debug, PartialEq, Eq)]
