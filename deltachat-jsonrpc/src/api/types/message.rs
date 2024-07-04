@@ -577,7 +577,11 @@ pub struct MessageData {
     pub file: Option<String>,
     pub location: Option<(f64, f64)>,
     pub override_sender_name: Option<String>,
+    /// Quoted message id. Takes preference over `quoted_text` (see below).
     pub quoted_message_id: Option<u32>,
+    /// If this is `Some((text, protect))`, `protect` specifies whether `text` should only be sent
+    /// encrypted. If it should, but the message is unencrypted, `text` is replaced with "...".
+    pub quoted_text: Option<(String, bool)>,
 }
 
 impl MessageData {
@@ -613,6 +617,8 @@ impl MessageData {
                     ),
                 )
                 .await?;
+        } else if self.quoted_text.is_some() {
+            message.set_quote_text(self.quoted_text);
         }
         Ok(message)
     }
